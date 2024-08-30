@@ -2,32 +2,55 @@ package server
 
 import (
 	"context"
-	"encoding/json"
-	"goplate/config"
+	"fmt"
+	"goplate/env"
 	"goplate/http/reqresp"
-	"goplate/logger"
+	log "goplate/pkg/json_logger"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/cors"
 )
 
 type (
 	FiberServer struct {
-		cfg *config.Config
+		cfg *env.BaseConfig
 		App *fiber.App
-		log *logger.SLog
+		log log.ITraceLogger
+	}
+
+	healthCheck struct {
+		HostName      string `json:"hostname"`
+		Version       string `json:"version"`
+		Description   string `json:"description"`
+		LocalDateTime string `json:"localDateTime"`
+		UtcDateTime   string `json:"utcDateTime"`
+		Uptime        string `json:"uptime"`
+		CPUNum        int    `json:"cpuNum"`
+		MemoryUsage   string `json:"memoryUsage"`
+		GoroutineNum  int    `json:"goroutineNum"`
 	}
 )
 
+var (
+	uptime time.Time
+	health healthCheck
+)
+
 func (fs *FiberServer) Run() error {
-	fs.log.Info("Server started on port: %v", fs.cfg.Port)
-	return fs.App.Listen(":" + fs.cfg.Port)
+	uptime = time.Now()
+	fs.log.Info("Server started...", "port", fs.cfg.Port)
+	err := fs.App.Listen(":" + fs.cfg.Port)
+	if err != nil {
+		fs.log.Error(err.Error())
+		panic(err)
+	}
+	return err
 }
 
 func (fs *FiberServer) Close(ctx ...context.Context) error {
-	defer fs.log.Info("Server stopped on port: %v", fs.cfg.Port)
+	defer fs.log.Info("Server stopped")
 	if len(ctx) > 0 {
 		return fs.App.ShutdownWithContext(ctx[0])
 	}
@@ -35,66 +58,51 @@ func (fs *FiberServer) Close(ctx ...context.Context) error {
 }
 
 func New(
-	cfg *config.Config,
-	log *logger.SLog,
-	customFiberConfig *fiber.Config,
-	customCorsConfig *cors.Config,
+	cfg *env.BaseConfig,
+	log log.ITraceLogger,
+	fiberConfig fiber.Config,
+	middlewares ...fiber.Handler,
 ) *FiberServer {
 	if cfg == nil {
 		panic("'cfg' is nil")
 	}
 
-	app := fiber.New(
-		func() fiber.Config {
-			if customFiberConfig == nil {
-				return fiber.Config{
-					AppName:               cfg.AppName + " " + cfg.AppVersion,
-					DisableStartupMessage: true,
-					JSONEncoder:           json.Marshal,
-					JSONDecoder:           json.Unmarshal,
-				}
-			}
-			return *customFiberConfig
-		}(),
-	)
+	hostname, _ := os.Hostname()
+	health = healthCheck{
+		HostName:    hostname,
+		Version:     cfg.App.Version,
+		Description: cfg.App.Name,
+		CPUNum:      runtime.NumCPU(),
+	}
 
-	app.Use(
-		cors.New(
-			func() cors.Config {
-				if customCorsConfig == nil {
-					return cors.Config{
-						AllowOrigins: "*",
-						AllowHeaders: "*",
-						AllowMethods: "*",
-					}
-				}
-				return *customCorsConfig
-			}(),
-		),
-	)
-
-	app.All("/health", func(c *fiber.Ctx) error {
-		type health struct {
-			HostName  string `json:"hostname"`
-			Version   string `json:"version"`
-			Timestamp string `json:"timestamp"`
-		}
-
-		healthcheck := health{
-			HostName: func() string {
-				hn, _ := os.Hostname()
-				return hn
-			}(),
-			Version:   cfg.AppName + " " + cfg.AppVersion,
-			Timestamp: time.Now().Format(time.RFC850),
-		}
-
-		return c.JSON(reqresp.NewData(healthcheck))
-	})
+	app := fiber.New(fiberConfig)
+	for i := 0; i < len(middlewares); i++ {
+		app.Use(middlewares[i])
+	}
 
 	return &FiberServer{
 		App: app,
 		cfg: cfg,
 		log: log,
 	}
+}
+
+func (fs *FiberServer) WithDefaultRouters() *FiberServer {
+	// health check endpoint
+	fs.App.All("/health",
+		func(c *fiber.Ctx) error {
+			memStats := runtime.MemStats{}
+			runtime.ReadMemStats(&memStats)
+
+			health.LocalDateTime = time.Now().Format("02.01.2006 15:04:05")
+			health.UtcDateTime = time.Now().UTC().Format("02.01.2006 15:04:05")
+			health.Uptime = time.Since(uptime).String()
+			health.MemoryUsage = fmt.Sprintf("%dMB", memStats.Alloc/1024/1024)
+			health.GoroutineNum = runtime.NumGoroutine()
+
+			return c.JSON(reqresp.NewData(health))
+		},
+	)
+
+	return fs
 }

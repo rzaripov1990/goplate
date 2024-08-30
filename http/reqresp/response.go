@@ -1,5 +1,7 @@
 package reqresp
 
+import "fmt"
+
 type (
 	Base struct {
 		Success bool `json:"success"`
@@ -10,10 +12,12 @@ type (
 		Data T `json:"data,omitempty"`
 	}
 
-	Error[E, T string] struct {
+	Error struct {
 		Base
-		Msg     E `json:"msg,omitempty"`
-		MsgType T `json:"msgType,omitempty"`
+		Msg        *string `json:"msg,omitempty"`
+		MsgType    *string `json:"msgType,omitempty"`
+		LogError   error   `json:"-"`
+		StatusCode int     `json:"-"`
 	}
 )
 
@@ -26,12 +30,37 @@ func NewData[T any](value T) Data[T] {
 	}
 }
 
-func NewError[E, T string](erro_ E, typ_ T) Error[E, T] {
-	return Error[E, T]{
+func NewError(statusCode int, err error, message any, msgType string) *Error {
+	var m string
+	switch t := message.(type) {
+	case string:
+		m = t
+	case []byte:
+		m = string(t)
+	case error:
+		m = t.Error()
+	default:
+		m = fmt.Sprintf("%v", t)
+	}
+
+	return &Error{
 		Base: Base{
 			Success: false,
 		},
-		Msg:     erro_,
-		MsgType: typ_,
+		Msg:        &m,
+		MsgType:    &msgType,
+		LogError:   err,
+		StatusCode: statusCode,
+	}
+}
+
+func (e Error) Error() string {
+	switch {
+	case e.Msg != nil && e.MsgType != nil:
+		return fmt.Sprintf("%s [%s]", *e.Msg, *e.MsgType)
+	case e.Msg != nil && e.MsgType == nil:
+		return *e.Msg
+	default:
+		return ""
 	}
 }

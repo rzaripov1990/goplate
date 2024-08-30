@@ -1,0 +1,30 @@
+
+
+
+###
+GET http://localhost:8080/
+
+
+###    
+GET http://localhost:8080/health
+
+
+###   
+GET http://localhost:8080/go
+   
+### 
+POST http://localhost:8080/post
+Content-Type: application/json
+
+{
+    "phone": "+70000000000" 
+}
+
+###      
+GET http://localhost:8080/panic
+
+###  
+POST http://localhost:8080/post
+Content-Type: multipart/form-data
+
+phone=+7777777777
