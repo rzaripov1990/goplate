@@ -1,11 +1,15 @@
 
 
 
-###
+###  
 GET http://localhost:8080/
 
 
-###    
+###  
+GET http://localhost:8080/error 
+
+
+###     
 GET http://localhost:8080/health
 
 
@@ -20,11 +24,22 @@ Content-Type: application/json
     "phone": "+70000000000" 
 }
 
+ 
+###  
+POST http://localhost:8080/post/xml
+Content-Type: application/xml
+
+<request>
+    <phone>+70000000000</phone>
+</request>
+
 ###      
 GET http://localhost:8080/panic
 
-###  
-POST http://localhost:8080/post
-Content-Type: multipart/form-data
+###         
+POST http://localhost:8080/post?param1=pa-pa-ram
+Content-Type: application/x-www-form-urlencoded
 
 phone=+7777777777
+&secret=asdasdasdasdasd
+

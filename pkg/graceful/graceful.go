@@ -1,3 +1,5 @@
+// The `graceful` package allows for the proper management of resource startup and shutdown,
+// ensuring that resources are initialized and terminated correctly to maintain system stability and reliability.
 package graceful
 
 import (

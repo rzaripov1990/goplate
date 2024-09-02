@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"goplate/env"
 	"goplate/http/reqresp"
-	log "goplate/pkg/json_logger"
+	log "goplate/pkg/trace_logger"
 	"os"
 	"runtime"
 	"time"

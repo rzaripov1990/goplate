@@ -1,4 +1,12 @@
-package context
+// Package `trace_context` enables precise control over the setting and
+// retrieval of the `trace_id` within a context,
+// ensuring that the unique identifier is consistently managed
+// throughout the lifecycle of a request.
+//
+// This capability is essential for maintaining traceability and
+// correlating log entries across different components of the application.
+
+package trace_context
 
 import (
 	"context"

@@ -5,9 +5,8 @@ import (
 	"fmt"
 	"goplate/env"
 	"goplate/http/server"
-	"goplate/http/server/middleware"
-	"goplate/http/server/middleware/tracer"
-	"goplate/pkg/json_logger"
+	"goplate/http/server/interceptor"
+	"goplate/pkg/trace_logger"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -15,8 +14,8 @@ import (
 
 func NewDefaultServer(
 	cfg *env.BaseConfig,
-	log json_logger.ITraceLogger,
-	mwConfig middleware.Config,
+	log trace_logger.ITraceLogger,
+	mwConfig interceptor.Config,
 ) *server.FiberServer {
 	server := server.New(
 		cfg,
@@ -26,10 +25,8 @@ func NewDefaultServer(
 			DisableStartupMessage: true,
 			JSONEncoder:           json.Marshal,
 			JSONDecoder:           json.Unmarshal,
-			ServerHeader:          fmt.Sprintf("%s %s [%s]", cfg.App.Name, cfg.App.Version, cfg.Environment),
+			ServerHeader:          fmt.Sprintf("%s %s [%s]", cfg.App.Name, cfg.App.Version, cfg.Environment), // is not secure
 		},
-		// tracer
-		tracer.New(),
 		// cors
 		cors.New(
 			cors.Config{
@@ -40,7 +37,7 @@ func NewDefaultServer(
 		),
 	).WithDefaultRouters()
 
-	server.App.Use(middleware.New(mwConfig))
+	server.App.Use(interceptor.New(mwConfig))
 
 	return server
 }

@@ -30,7 +30,7 @@ func NewData[T any](value T) Data[T] {
 	}
 }
 
-func NewError(statusCode int, err error, message any, msgType string) *Error {
+func NewError(statusCode int, err error, message any, msgType *string) *Error {
 	var m string
 	switch t := message.(type) {
 	case string:
@@ -48,7 +48,7 @@ func NewError(statusCode int, err error, message any, msgType string) *Error {
 			Success: false,
 		},
 		Msg:        &m,
-		MsgType:    &msgType,
+		MsgType:    msgType,
 		LogError:   err,
 		StatusCode: statusCode,
 	}

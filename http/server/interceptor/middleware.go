@@ -1,10 +1,12 @@
-package middleware
+package interceptor
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"goplate/http/reqresp"
-	"goplate/pkg/json_logger"
+	"goplate/pkg/trace_context"
+	"goplate/pkg/trace_logger"
 	"log/slog"
 	"strings"
 	"time"
@@ -14,7 +16,7 @@ import (
 
 type (
 	Config struct {
-		Log json_logger.ITraceLogger
+		Log trace_logger.ITraceLogger
 
 		DefaultPanicError *reqresp.Error
 
@@ -64,7 +66,7 @@ var (
 	// ConfigDefault is the default config
 	configDefault = Config{
 		Log:               nil,
-		DefaultPanicError: reqresp.NewError(fiber.StatusInternalServerError, nil, "panic", ""),
+		DefaultPanicError: reqresp.NewError(fiber.StatusInternalServerError, nil, "panic", nil),
 		EnableLogRequest:  true,
 		EnableLogHeaders:  true,
 		EnableLogResponse: true,
@@ -118,8 +120,19 @@ func New(config ...Config) fiber.Handler {
 
 	// Return new handler
 	return func(c *fiber.Ctx) error {
-
 		start := time.Now()
+
+		// set trace_id
+		c.SetUserContext(
+			trace_context.SetTraceID(
+				c.UserContext(),
+				c.Get( // from Request headers
+					trace_context.TraceIDKeyName,
+					trace_context.GetTraceID(c.UserContext()),
+				),
+			),
+		)
+
 		if cfg.EnableCatchPanic {
 			// catch panics
 			defer func() {
@@ -127,7 +140,7 @@ func New(config ...Config) fiber.Handler {
 				if r := recover(); r != nil {
 					panErr = fmt.Errorf("%v", r)
 					frames := GetStacktrace()
-					dpe := reqresp.NewError(cfg.DefaultPanicError.StatusCode, panErr, *cfg.DefaultPanicError.Msg, *cfg.DefaultPanicError.MsgType)
+					dpe := reqresp.NewError(cfg.DefaultPanicError.StatusCode, panErr, *cfg.DefaultPanicError.Msg, cfg.DefaultPanicError.MsgType)
 
 					if cfg.Log != nil {
 						var slogValues []slog.Attr
@@ -206,25 +219,38 @@ func New(config ...Config) fiber.Handler {
 			body := c.Request().Body()
 			if len(body) > 0 {
 				var source map[string]any
-				if err := json.Unmarshal(body, &source); err == nil {
 
-					if cfg.MaskSensitiveData && (is(ctype, fiber.MIMEApplicationJSON) || is(ctype, fiber.MIMEApplicationXML)) {
-						if len(cfg.SensitiveData.DeleteKeyInRequest) > 0 {
-							deleteKeys(source)
-						}
-						if len(cfg.SensitiveData.InRequest) > 0 {
-							maskKeys(source, sensitiveInRequest)
-						}
+				if is(ctype, fiber.MIMEApplicationJSON) {
+					_ = json.Unmarshal(body, &source)
+				} else if is(ctype, fiber.MIMEApplicationXML) {
+					_ = xml.Unmarshal(body, &source)
+				} else if is(ctype, fiber.MIMEApplicationForm) {
+					parsed := strings.Split(string(body), "&")
+					if len(parsed) > 0 {
+						source = make(map[string]any)
 					}
-
-					slogValues = append(
-						slogValues,
-						slog.Attr{
-							Key:   "body",
-							Value: slog.AnyValue(source),
-						},
-					)
+					for i := range parsed {
+						part := strings.Split(parsed[i], "=")
+						source[part[0]] = part[1]
+					}
 				}
+
+				if cfg.MaskSensitiveData && source != nil {
+					if len(cfg.SensitiveData.DeleteKeyInRequest) > 0 {
+						deleteKeys(source)
+					}
+					if len(cfg.SensitiveData.InRequest) > 0 {
+						maskKeys(source, sensitiveInRequest)
+					}
+				}
+
+				slogValues = append(
+					slogValues,
+					slog.Attr{
+						Key:   "body",
+						Value: slog.AnyValue(source),
+					},
+				)
 			}
 
 			cfg.Log.LogAttrs(
@@ -235,8 +261,32 @@ func New(config ...Config) fiber.Handler {
 			)
 		}
 
+		var (
+			body     []byte
+			errFound bool
+			rre      *reqresp.Error
+		)
+
 		// go to next handler
 		err := c.Next()
+
+		// route.Get("/handle", func(c *fiber.Ctx) error {
+		//    return fmt.Errorf("unhandled error")
+		// })
+		// or
+		// route.Get("/handle", func(c *fiber.Ctx) error {
+		//	  reqresp.NewError(400, errors.New("bad request"), "see documentation", "E_MODEL")
+		// })
+		if err != nil {
+			errFound = true
+			ok := false
+			if rre, ok = err.(*reqresp.Error); ok {
+				body, _ = json.Marshal(rre)
+			} else {
+				rre = reqresp.NewError(fiber.StatusInternalServerError, err, err, nil)
+				body, _ = json.Marshal(rre)
+			}
+		}
 
 		if cfg.EnableLogResponse {
 			duration := time.Since(start)
@@ -274,28 +324,36 @@ func New(config ...Config) fiber.Handler {
 				)
 			}
 
-			body := c.Response().Body()
+			// when err is nil, get response body
+			if body == nil {
+				body = c.Response().Body()
+			}
+
 			if len(body) > 0 {
 				var source map[string]any
-				if err := json.Unmarshal(body, &source); err == nil {
 
-					if cfg.MaskSensitiveData && (is(ctype, fiber.MIMEApplicationJSON) || is(ctype, fiber.MIMEApplicationXML)) {
-						if len(cfg.SensitiveData.DeleteKeyInResponse) > 0 {
-							deleteKeys(source)
-						}
-						if len(cfg.SensitiveData.InResponse) > 0 {
-							maskKeys(source, sensitiveInResponse)
-						}
-					}
-
-					slogValues = append(
-						slogValues,
-						slog.Attr{
-							Key:   "response",
-							Value: slog.AnyValue(source),
-						},
-					)
+				if is(ctype, fiber.MIMEApplicationJSON) {
+					_ = json.Unmarshal(body, &source)
+				} else if is(ctype, fiber.MIMEApplicationXML) {
+					_ = xml.Unmarshal(body, &source)
 				}
+
+				if cfg.MaskSensitiveData && source != nil {
+					if len(cfg.SensitiveData.DeleteKeyInResponse) > 0 {
+						deleteKeys(source)
+					}
+					if len(cfg.SensitiveData.InResponse) > 0 {
+						maskKeys(source, sensitiveInResponse)
+					}
+				}
+
+				slogValues = append(
+					slogValues,
+					slog.Attr{
+						Key:   "response",
+						Value: slog.AnyValue(source),
+					},
+				)
 			}
 
 			cfg.Log.LogAttrs(
@@ -310,6 +368,11 @@ func New(config ...Config) fiber.Handler {
 				"Request processed",
 				slogValues...,
 			)
+		}
+
+		if errFound {
+			c.Status(rre.StatusCode).JSON(rre)
+			return nil
 		}
 
 		return err

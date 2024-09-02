@@ -3,13 +3,16 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"goplate"
 	"goplate/env"
 	"goplate/http/reqresp"
 	"goplate/http/server"
-	"goplate/http/server/middleware"
+	"goplate/http/server/interceptor"
+	"goplate/pkg/generic"
 	"goplate/pkg/graceful"
-	"goplate/pkg/json_logger"
+	"goplate/pkg/ierror"
+	"goplate/pkg/trace_logger"
 	"sync"
 	"testing"
 	"time"
@@ -29,37 +32,54 @@ func TestServer(t *testing.T) {
 	_, group := graceful.Prepare(context.Background())
 
 	cfg := env.New()
-	log := json_logger.New(cfg)
+	log := trace_logger.New(cfg)
 
-	mw := middleware.Config{
+	ierror.New(log)
+
+	mw := interceptor.Config{
 		Log:               log,
 		EnableLogRequest:  true,
 		EnableLogHeaders:  true,
 		EnableLogResponse: true,
 		EnableCatchPanic:  true,
 		MaskSensitiveData: true,
-		SensitiveData: middleware.SensitiveData{
-			InRequest:  []string{"phone"},
-			InResponse: []string{"content"},
+		SensitiveData: interceptor.SensitiveData{
+			DeleteKeyInRequest:  []string{"file", "content"},
+			DeleteKeyInResponse: []string{"bodyB64", "file", "content"},
+			InRequest: []string{
+				"password", "pswd", "secret",
+				"phoneNo", "phoneNumber", "phone", "mobile", "mobileNo",
+				"smsCode", "otpCode",
+				"cardId", "userId", "maskedCard",
+				"firstName", "lastName",
+			},
+			InResponse: []string{
+				"bodyB64",
+			},
 			InHeader: []string{
 				fiber.HeaderAccept,
 				fiber.HeaderUserAgent,
 				fiber.HeaderAcceptEncoding,
 				fiber.HeaderConnection,
+				fiber.HeaderAuthorization,
 			},
 		},
-		DefaultPanicError:   reqresp.NewError(fiber.StatusInternalServerError, nil, "panic handled", "E_PANIC"),
+		DefaultPanicError:   reqresp.NewError(fiber.StatusInternalServerError, nil, "panic handled", generic.Ptr("E_PANIC")),
 		SlowRequestDuration: 5 * time.Second,
 	}
 
 	app := goplate.NewDefaultServer(cfg, log, mw)
 
 	app.App.Get("/", func(c *fiber.Ctx) error {
-		return reqresp.NewError(204, errors.New("log error"), "client message", "E_TYPE")
+		return reqresp.NewError(400, errors.New("bad request"), "see documentation", generic.Ptr("E_MODEL"))
+	})
+
+	app.App.Get("/error", func(c *fiber.Ctx) error {
+		return fmt.Errorf("unhandled error")
 	})
 
 	app.App.Post("/post", func(c *fiber.Ctx) error {
-		time.Sleep(6 * time.Second)
+		//time.Sleep(6 * time.Second)
 		return c.JSON(
 			reqresp.NewData(
 				map[string]string{
@@ -87,6 +107,8 @@ func TestServer(t *testing.T) {
 	app.App.Get("/panic", func(c *fiber.Ctx) error {
 		panic("aaaaaa!!!")
 	})
+
+	log.Info("comp", "equal", generic.Equal("1", 1))
 
 	graceful.Process(group, app, gracefulRun)
 	graceful.Close(group, app, gracefulStop)
