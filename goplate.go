@@ -6,7 +6,7 @@ import (
 	"goplate/env"
 	"goplate/http/server"
 	"goplate/http/server/interceptor"
-	"goplate/pkg/trace_logger"
+	"log/slog"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -14,7 +14,7 @@ import (
 
 func NewDefaultServer(
 	cfg *env.BaseConfig,
-	log trace_logger.ITraceLogger,
+	log *slog.Logger,
 	mwConfig interceptor.Config,
 ) *server.FiberServer {
 	server := server.New(

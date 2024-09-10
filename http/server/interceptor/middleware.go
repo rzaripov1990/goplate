@@ -2,10 +2,12 @@ package interceptor
 
 import (
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
-	"goplate/http/reqresp"
-	"goplate/pkg/trace_context"
+
+	//"goplate/http/reqresp"
+
+	trace_context "github.com/rzaripov1990/trace_ctx"
+
 	"goplate/pkg/trace_logger"
 	"log/slog"
 	"strings"
@@ -16,9 +18,11 @@ import (
 
 type (
 	Config struct {
-		Log trace_logger.ITraceLogger
+		Log *slog.Logger
 
-		DefaultPanicError *reqresp.Error
+		ErrorHandler fiber.ErrorHandler
+
+		//DefaultPanicError *reqresp.Error
 
 		// Enable logging all requests.
 		//
@@ -66,7 +70,7 @@ var (
 	// ConfigDefault is the default config
 	configDefault = Config{
 		Log:               nil,
-		DefaultPanicError: reqresp.NewError(fiber.StatusInternalServerError, nil, "panic", nil),
+		ErrorHandler:      nil,
 		EnableLogRequest:  true,
 		EnableLogHeaders:  true,
 		EnableLogResponse: true,
@@ -95,6 +99,10 @@ var (
 	sensitiveInHeader   = map[string]bool{}
 	sensitiveInResponse = map[string]bool{}
 )
+
+func is(one []byte, two string) bool {
+	return strings.HasPrefix(string(one), two)
+}
 
 // New creates a new middleware handler
 func New(config ...Config) fiber.Handler {
@@ -140,36 +148,27 @@ func New(config ...Config) fiber.Handler {
 				if r := recover(); r != nil {
 					panErr = fmt.Errorf("%v", r)
 					frames := GetStacktrace()
-					dpe := reqresp.NewError(cfg.DefaultPanicError.StatusCode, panErr, *cfg.DefaultPanicError.Msg, cfg.DefaultPanicError.MsgType)
 
 					if cfg.Log != nil {
 						var slogValues []slog.Attr
 						slogValues = append(
-							slogValues, slog.Attr{
-								Key:   "error",
-								Value: slog.StringValue(panErr.Error()),
-							}, slog.Attr{
-								Key:   "stacktrace",
-								Value: slog.AnyValue(frames.Print()),
-							},
-						)
-
-						slogValues = append(
 							slogValues,
-							slog.Attr{
-								Key:   "response",
-								Value: slog.AnyValue(dpe),
-							},
+							slog.String("error", panErr.Error()),
+							slog.Any("stacktrace", frames.Print()),
 						)
 
-						cfg.Log.LogAttrs(
+						trace_logger.L(c.UserContext(), cfg.Log).LogAttrs(
 							c.UserContext(),
 							slog.LevelError,
 							"Request processed",
 							slogValues...)
 					}
 
-					c.Status(fiber.StatusInternalServerError).JSON(dpe)
+					if cfg.ErrorHandler != nil {
+						cfg.ErrorHandler(c, panErr)
+					} else {
+						c.Context().Error(panErr.Error(), fiber.StatusInternalServerError)
+					}
 				}
 			}()
 		}
@@ -187,13 +186,8 @@ func New(config ...Config) fiber.Handler {
 			var slogValues []slog.Attr
 			slogValues = append(
 				slogValues,
-				slog.Attr{
-					Key:   "method",
-					Value: slog.StringValue(c.Route().Method),
-				}, slog.Attr{
-					Key:   "query",
-					Value: slog.StringValue(uri),
-				},
+				slog.String("method", c.Route().Method),
+				slog.String("query", uri),
 			)
 
 			if cfg.EnableLogHeaders {
@@ -207,10 +201,7 @@ func New(config ...Config) fiber.Handler {
 				if len(headers) > 0 {
 					slogValues = append(
 						slogValues,
-						slog.Attr{
-							Key:   "headers",
-							Value: slog.StringValue(strings.Join(headers, ";")),
-						},
+						slog.String("headers", strings.Join(headers, ";")),
 					)
 				}
 			}
@@ -222,8 +213,6 @@ func New(config ...Config) fiber.Handler {
 
 				if is(ctype, fiber.MIMEApplicationJSON) {
 					_ = json.Unmarshal(body, &source)
-				} else if is(ctype, fiber.MIMEApplicationXML) {
-					_ = xml.Unmarshal(body, &source)
 				} else if is(ctype, fiber.MIMEApplicationForm) {
 					parsed := strings.Split(string(body), "&")
 					if len(parsed) > 0 {
@@ -237,23 +226,20 @@ func New(config ...Config) fiber.Handler {
 
 				if cfg.MaskSensitiveData && source != nil {
 					if len(cfg.SensitiveData.DeleteKeyInRequest) > 0 {
-						deleteKeys(source)
+						DeleteKeys(source)
 					}
 					if len(cfg.SensitiveData.InRequest) > 0 {
-						maskKeys(source, sensitiveInRequest)
+						MaskSensitiveKeys(source, sensitiveInRequest)
 					}
 				}
 
 				slogValues = append(
 					slogValues,
-					slog.Attr{
-						Key:   "body",
-						Value: slog.AnyValue(source),
-					},
+					slog.Any("body", source),
 				)
 			}
 
-			cfg.Log.LogAttrs(
+			trace_logger.L(c.UserContext(), cfg.Log).LogAttrs(
 				c.UserContext(),
 				slog.LevelDebug,
 				"Request",
@@ -264,28 +250,14 @@ func New(config ...Config) fiber.Handler {
 		var (
 			body     []byte
 			errFound bool
-			rre      *reqresp.Error
 		)
 
 		// go to next handler
 		err := c.Next()
 
-		// route.Get("/handle", func(c *fiber.Ctx) error {
-		//    return fmt.Errorf("unhandled error")
-		// })
-		// or
-		// route.Get("/handle", func(c *fiber.Ctx) error {
-		//	  reqresp.NewError(400, errors.New("bad request"), "see documentation", "E_MODEL")
-		// })
 		if err != nil {
 			errFound = true
-			ok := false
-			if rre, ok = err.(*reqresp.Error); ok {
-				body, _ = json.Marshal(rre)
-			} else {
-				rre = reqresp.NewError(fiber.StatusInternalServerError, err, err, nil)
-				body, _ = json.Marshal(rre)
-			}
+			body = []byte(err.Error())
 		}
 
 		if cfg.EnableLogResponse {
@@ -295,32 +267,17 @@ func New(config ...Config) fiber.Handler {
 			var slogValues []slog.Attr
 			slogValues = append(
 				slogValues,
-				slog.Attr{
-					Key:   "content-type",
-					Value: slog.StringValue(string(ctype)),
-				},
-				slog.Attr{
-					Key:   "code",
-					Value: slog.IntValue(c.Response().StatusCode()),
-				},
-				slog.Attr{
-					Key:   "duration_nanosec",
-					Value: slog.DurationValue(duration),
-				},
-				slog.Attr{
-					Key:   "duration",
-					Value: slog.StringValue(duration.String()),
-				},
+				slog.String("content-type", string(ctype)),
+				slog.Int("code", c.Response().StatusCode()),
+				slog.Duration("duration_nanosec", duration),
+				slog.String("duration", duration.String()),
 			)
 
 			slow := cfg.SlowRequestDuration > 0 && duration.Seconds() > cfg.SlowRequestDuration.Seconds()
 			if slow {
 				slogValues = append(
 					slogValues,
-					slog.Attr{
-						Key:   "slow",
-						Value: slog.BoolValue(true),
-					},
+					slog.Bool("slow", true),
 				)
 			}
 
@@ -334,29 +291,24 @@ func New(config ...Config) fiber.Handler {
 
 				if is(ctype, fiber.MIMEApplicationJSON) {
 					_ = json.Unmarshal(body, &source)
-				} else if is(ctype, fiber.MIMEApplicationXML) {
-					_ = xml.Unmarshal(body, &source)
 				}
 
 				if cfg.MaskSensitiveData && source != nil {
 					if len(cfg.SensitiveData.DeleteKeyInResponse) > 0 {
-						deleteKeys(source)
+						DeleteKeys(source)
 					}
 					if len(cfg.SensitiveData.InResponse) > 0 {
-						maskKeys(source, sensitiveInResponse)
+						MaskSensitiveKeys(source, sensitiveInResponse)
 					}
 				}
 
 				slogValues = append(
 					slogValues,
-					slog.Attr{
-						Key:   "response",
-						Value: slog.AnyValue(source),
-					},
+					slog.Any("response", source),
 				)
 			}
 
-			cfg.Log.LogAttrs(
+			trace_logger.L(c.UserContext(), cfg.Log).LogAttrs(
 				c.UserContext(),
 				func() slog.Level {
 					if slow {
@@ -370,9 +322,11 @@ func New(config ...Config) fiber.Handler {
 			)
 		}
 
-		if errFound {
-			c.Status(rre.StatusCode).JSON(rre)
+		if errFound && cfg.ErrorHandler != nil {
+			cfg.ErrorHandler(c, err)
 			return nil
+		} else {
+			c.Context().Error(err.Error(), fiber.StatusInternalServerError)
 		}
 
 		return err

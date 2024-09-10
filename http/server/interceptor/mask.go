@@ -3,11 +3,15 @@ package interceptor
 import "strings"
 
 var (
-	wildcardstr = repeat('*', 4028)
+	wildcardstr = repeat('*', 2024)
 )
 
-func is(one []byte, two string) bool {
-	return strings.HasPrefix(string(one), two)
+func DeleteKeys(data map[string]any) {
+	deleteKeys(data)
+}
+
+func MaskSensitiveKeys(data map[string]any, sensitiveKeys map[string]bool) {
+	mask(data, sensitiveKeys)
 }
 
 func repeat(s byte, l int) string {
@@ -21,15 +25,15 @@ func repeat(s byte, l int) string {
 
 func deleteKeys(data map[string]any) {
 	for key, value := range data {
-		dfs(key, value, data, sensitiveInResponse[key])
+		clean(key, value, data, sensitiveInResponse[key])
 	}
 }
 
-func dfs(ik string, iv any, data map[string]any, keyExists bool) {
+func clean(ik string, iv any, data map[string]any, keyExists bool) {
 	switch ivt := iv.(type) {
 	case []any:
 		for _, val := range ivt {
-			dfs(ik, val, data, keyExists)
+			clean(ik, val, data, keyExists)
 		}
 	case map[string]any:
 		deleteKeys(ivt)
@@ -40,20 +44,20 @@ func dfs(ik string, iv any, data map[string]any, keyExists bool) {
 	}
 }
 
-func maskKeys(data map[string]any, sensitive map[string]bool) {
+func mask(data map[string]any, sensitive map[string]bool) {
 	for key, value := range data {
-		modScan(key, value, data, sensitive[key], sensitive)
+		scan(key, value, data, sensitive[key], sensitive)
 	}
 }
 
-func modScan(ik string, iv any, data map[string]any, keyExists bool, sensitive map[string]bool) {
+func scan(ik string, iv any, data map[string]any, keyExists bool, sensitive map[string]bool) {
 	switch ivt := iv.(type) {
 	case []any:
 		for _, val := range ivt {
-			modScan(ik, val, data, keyExists, sensitive)
+			scan(ik, val, data, keyExists, sensitive)
 		}
 	case map[string]any:
-		maskKeys(ivt, sensitive)
+		mask(ivt, sensitive)
 	default:
 		if keyExists {
 			switch val := ivt.(type) {

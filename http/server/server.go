@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"goplate/env"
 	"goplate/http/reqresp"
-	log "goplate/pkg/trace_logger"
+	"log/slog"
 	"os"
 	"runtime"
 	"time"
@@ -17,7 +17,7 @@ type (
 	FiberServer struct {
 		cfg *env.BaseConfig
 		App *fiber.App
-		log log.ITraceLogger
+		log *slog.Logger
 	}
 
 	healthCheck struct {
@@ -59,7 +59,7 @@ func (fs *FiberServer) Close(ctx ...context.Context) error {
 
 func New(
 	cfg *env.BaseConfig,
-	log log.ITraceLogger,
+	log *slog.Logger,
 	fiberConfig fiber.Config,
 	middlewares ...fiber.Handler,
 ) *FiberServer {

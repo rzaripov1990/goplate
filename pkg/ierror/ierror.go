@@ -2,18 +2,19 @@ package ierror
 
 import (
 	"context"
-	"goplate/pkg/generic"
-	"goplate/pkg/trace_logger"
+	"log/slog"
 	"sync"
+
+	generic "github.com/rzaripov1990/genx"
 )
 
-var log trace_logger.ITraceLogger
+var logger *slog.Logger
 
 // Initialize only once, in main.go
-func New(l trace_logger.ITraceLogger) {
+func New(l *slog.Logger) {
 	sync.OnceFunc(
 		func() {
-			log = l
+			logger = l
 		},
 	)
 }
@@ -23,7 +24,7 @@ func Assert(ctx context.Context, err error, exclude ...error) (ok bool) {
 	ok = err != nil
 	if ok {
 		if !generic.In(err, exclude) {
-			log.ErrorContext(ctx, "", err)
+			logger.ErrorContext(ctx, "", "received error", err.Error())
 		} else {
 			ok = false
 		}
